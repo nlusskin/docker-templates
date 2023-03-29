@@ -1,0 +1,45 @@
+FROM ubuntu:22.04
+
+# install dependencies
+RUN apt update && \
+    apt install -y libreadline6-dev zlib1g-dev build-essential vim gcc wget
+
+# download & extract source for postgres and pgvector
+RUN wget https://ftp.postgresql.org/pub/source/v15.2/postgresql-15.2.tar.gz && \
+    wget https://github.com/pgvector/pgvector/archive/refs/tags/v0.4.0.tar.gz && \
+    tar -xf postgresql-15.2.tar.gz && \
+    tar -xf v0.4.0.tar.gz
+
+# build postgres from source with a larger blocksize & index size
+RUN cd postgresql-15.2 && \
+    ./configure --with-blocksize=32 && \
+    #sed -i 's/INDEX_SIZE_MASK 0x1FFF/INDEX_SIZE_MASK 0x2000/' src/include/access/itup.h && \
+    make && \
+    make install
+
+# add postgres commands to path
+ENV PATH=/usr/local/pgsql/bin:$PATH
+
+# configure pgvector with a larger max vector size and make extension
+RUN cd pgvector-0.4.0 && \
+    #sed -i 's/IVFFLAT_MAX_DIM 2000/IVFFLAT_MAX_DIM 8000/' src/ivfflat.h && \
+    ls && \
+    make && \
+    make install
+
+# create and switch to the postgres user to run the database commands
+RUN useradd -m postgres
+USER postgres
+
+# start the database and configure to allow for remote connections
+RUN cd && \
+    initdb -D ./data && \
+    echo 'host  all  all  0.0.0.0/0  trust' >> ./data/pg_hba.conf && \
+    echo 'pg_ctl -D /home/postgres/data -l /home/postgres/logfile -o "-h 0.0.0.0" start' > run.sh && \
+    echo 'psql -c "CREATE EXTENSION vector;"' >> run.sh && \
+    echo 'tail -f /home/postgres/logfile' >> run.sh && \
+    chmod a+x run.sh
+
+# keep the container running by placing command in foreground
+CMD [ "sh", "-c", "/home/postgres/run.sh"]
+EXPOSE 5432
